@@ -65,11 +65,11 @@ def evaluate_cross(fps, eval_data='eval_data.pkl', num_workers=5):
 
     Same deals are used for both batches.  Total games = len(eval_data) * 2.
     """
-    ai_landlord_model = f'baselines/landlord_weights_{fps}.ckpt'
+    ai_landlord_model = f'./douzero_checkpoints/douzero/landlord_weights_{fps}.ckpt'
     ai_farmer_models = {
-        'landlord_down':   f'baselines/landlord_down_weights_{fps}.ckpt',
-        'landlord_across': f'baselines/landlord_across_weights_{fps}.ckpt',
-        'landlord_up':     f'baselines/landlord_up_weights_{fps}.ckpt',
+        'landlord_down':   f'./douzero_checkpoints/douzero/landlord_down_weights_{fps}.ckpt',
+        'landlord_across': f'./douzero_checkpoints/douzero/landlord_across_weights_{fps}.ckpt',
+        'landlord_up':     f'./douzero_checkpoints/douzero/landlord_up_weights_{fps}.ckpt',
     }
 
     with open(eval_data, 'rb') as f:
