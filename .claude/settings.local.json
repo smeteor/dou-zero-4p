@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Recurse -Depth 1 -Name)",
+      "Bash(Sort-Object)",
+      "Bash(python *)"
+    ]
+  }
+}
