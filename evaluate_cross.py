@@ -13,6 +13,7 @@ Cross win rate = AI wins / total games.
 
 Usage:
     python evaluate_cross.py --fps 217600
+    python evaluate_cross.py --fps 217600 --opponent rule
     python evaluate_cross.py --fps 217600 --eval_data eval_data_1000.pkl --gpu_device 7
 """
 
@@ -55,12 +56,12 @@ def _run_batch(card_play_data_list, card_play_model_path_dict, num_workers):
     return num_landlord_wins, num_farmer_wins, num_landlord_scores, num_farmer_scores
 
 
-def evaluate_cross(fps, eval_data='eval_data.pkl', num_workers=5):
+def evaluate_cross(fps, opponent='random', eval_data='eval_data.pkl', num_workers=5):
     """Cross win rate evaluation.
 
     Batch 1: AI at landlord (landlord_weights_{fps}.ckpt),
-             opponents at farmer seats (random).
-    Batch 2: opponent at landlord (random),
+             opponents at farmer seats.
+    Batch 2: opponent at landlord,
              AI at farmer seats (landlord_down/across/up_weights_{fps}.ckpt).
 
     Same deals are used for both batches.  Total games = len(eval_data) * 2.
@@ -75,21 +76,21 @@ def evaluate_cross(fps, eval_data='eval_data.pkl', num_workers=5):
     with open(eval_data, 'rb') as f:
         data = pickle.load(f)
 
-    # Batch 1: AI landlord  vs  random farmers
+    # Batch 1: AI landlord  vs  opponent farmers
     batch1_dict = {
         'landlord':        ai_landlord_model,
-        'landlord_down':   'random',
-        'landlord_across': 'random',
-        'landlord_up':     'random',
+        'landlord_down':   opponent,
+        'landlord_across': opponent,
+        'landlord_up':     opponent,
     }
     l_wins, f_wins, l_scores, f_scores = _run_batch(data, batch1_dict, num_workers)
     ai_wins_as_landlord = l_wins
     ai_scores_as_landlord = l_scores
     games_as_landlord = l_wins + f_wins
 
-    # Batch 2: random landlord  vs  AI farmers
+    # Batch 2: opponent landlord  vs  AI farmers
     batch2_dict = {
-        'landlord':        'random',
+        'landlord':        opponent,
         'landlord_down':   ai_farmer_models['landlord_down'],
         'landlord_across': ai_farmer_models['landlord_across'],
         'landlord_up':     ai_farmer_models['landlord_up'],
@@ -110,14 +111,15 @@ def evaluate_cross(fps, eval_data='eval_data.pkl', num_workers=5):
     print('Cross Win Rate Evaluation')
     print('=' * 60)
     print(f'  fps:               {fps}')
+    print(f'  opponent:          {opponent}')
     print(f'  eval_data:         {eval_data}')
     print(f'  unique deals:      {games_as_landlord}')
     print(f'  total games:       {total_games}')
     print(f'  num_workers:       {num_workers}')
     print('-' * 60)
-    print(f'  [Batch 1] AI landlord model:')
+    print(f'  [Batch 1] AI landlord  vs  opponent farmers ({opponent})')
     print(f'    landlord         {ai_landlord_model}')
-    print(f'  [Batch 2] AI farmer models:')
+    print(f'  [Batch 2] opponent landlord ({opponent})  vs  AI farmers')
     for pos, m in ai_farmer_models.items():
         print(f'    {pos:<18} {m}')
     print('-' * 60)
@@ -150,6 +152,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('DouDizhu 4-player Cross Win Rate Evaluation')
     parser.add_argument('--fps', type=int, required=True,
                         help='Training frames of the checkpoint, e.g. 217600')
+    parser.add_argument('--opponent', type=str, default='random',
+                        choices=['random', 'rule'],
+                        help='Opponent type (default: random)')
     parser.add_argument('--eval_data', type=str, default='eval_data.pkl')
     parser.add_argument('--num_workers', type=int, default=5)
     parser.add_argument('--gpu_device', type=str, default='')
@@ -160,6 +165,7 @@ if __name__ == '__main__':
 
     evaluate_cross(
         fps=args.fps,
+        opponent=args.opponent,
         eval_data=args.eval_data,
         num_workers=args.num_workers,
     )

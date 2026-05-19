@@ -13,6 +13,9 @@ def load_card_play_models(card_play_model_path_dict):
         if path == 'rlcard':
             from .rlcard_agent import RLCardAgent
             players[position] = RLCardAgent(position)
+        elif path == 'rule':
+            from .rule_agent import RuleAgent
+            players[position] = RuleAgent(position)
         elif path == 'random':
             from .random_agent import RandomAgent
             players[position] = RandomAgent()
