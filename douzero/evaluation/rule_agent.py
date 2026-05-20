@@ -97,15 +97,12 @@ def _find_smallest_beating(legal_actions, rival_info):
         my_rank = my_info.get('rank', 0)
 
         if rival_type in (TYPE_1_SINGLE, TYPE_2_PAIR, TYPE_3_TRIPLE,
-                          TYPE_9_SERIAL_PAIR, TYPE_10_SERIAL_TRIPLE):
+                          TYPE_7_3_2):
             if my_rank > rival_rank and my_rank < best_rank:
                 best = ac
                 best_rank = my_rank
-        elif rival_type == TYPE_7_3_2:
-            if my_rank > rival_rank and my_rank < best_rank:
-                best = ac
-                best_rank = my_rank
-        elif rival_type == TYPE_12_SERIAL_3_2:
+        elif rival_type in (TYPE_9_SERIAL_PAIR, TYPE_10_SERIAL_TRIPLE,
+                            TYPE_12_SERIAL_3_2):
             my_len = my_info.get('len', 0)
             rival_len = rival_info.get('len', 0)
             if my_len == rival_len and my_rank > rival_rank and my_rank < best_rank:
@@ -122,51 +119,72 @@ class RuleAgent:
         self.position = position
 
     def act(self, infoset):
+        legal_actions = infoset.legal_actions
+        action = None
+
         try:
-            legal_actions = infoset.legal_actions
             last_move = infoset.last_move
             last_pid = infoset.last_pid
 
-            # --- Leading (no rival move: all others passed, we open) ---
-            if len(last_move) == 0:
+            # --- Leading: we played last and everyone else passed ---
+            if last_pid == self.position:
                 action = self._lead(infoset.player_hand_cards, legal_actions)
-                if action is not None:
-                    assert action in legal_actions
-                    return action
+                if action is None:
+                    # fall back: smallest single, or first legal action
+                    singles = [a for a in legal_actions if len(a) == 1]
+                    if singles:
+                        action = min(singles, key=lambda a: a[0])
+                    elif legal_actions:
+                        action = legal_actions[0]
 
             # --- Following ---
             else:
                 rival_info = get_move_type(last_move)
-                rival_type = rival_info['type']
 
                 # 1) Try to beat with the same type (smallest beating move)
-                beating = _find_smallest_beating(legal_actions, rival_info)
-                if beating is not None:
-                    assert beating in legal_actions
-                    return beating
+                action = _find_smallest_beating(legal_actions, rival_info)
 
-                # 2) Can't beat with same type. If rival is a teammate, pass.
-                if _is_teammate(self.position, last_pid):
+                # 2) Can't beat — if rival is teammate, pass
+                if action is None and _is_teammate(self.position, last_pid):
                     if [] in legal_actions:
-                        return []
+                        action = []
 
-                # 3) Rival is an enemy — try a bomb
-                bomb_actions = [a for a in legal_actions if len(a) > 0
-                                and get_move_type(a)['type'] in _BOMB_TYPES]
-                if bomb_actions:
-                    # Play the smallest bomb
-                    bomb_actions.sort(key=lambda a: _move_rank(a))
-                    return bomb_actions[0]
+                # 3) Rival is enemy — try a bomb
+                if action is None:
+                    bomb_actions = [a for a in legal_actions if len(a) > 0
+                                    and get_move_type(a)['type'] in _BOMB_TYPES]
+                    if bomb_actions:
+                        bomb_actions.sort(key=lambda a: _move_rank(a))
+                        action = bomb_actions[0]
 
                 # 4) Nothing to play — pass
-                if [] in legal_actions:
-                    return []
+                if action is None and [] in legal_actions:
+                    action = []
 
         except Exception:
-            pass
+            import sys
+            import traceback
+            print(f'[RuleAgent {self.position}] exception in act():', file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
-        # Fallback
-        return random.choice(legal_actions)
+        # --- Validate and fallback ---
+        if action is not None and action in legal_actions:
+            return action
+
+        # Debug: action validation failed
+        import sys
+        print(f'[RuleAgent {self.position}] validation failed:', file=sys.stderr)
+        print(f'  action={action}', file=sys.stderr)
+        print(f'  len(legal_actions)={len(legal_actions)}', file=sys.stderr)
+        print(f'  last_pid={infoset.last_pid}', file=sys.stderr)
+        print(f'  last_move={infoset.last_move}', file=sys.stderr)
+        print(f'  hand_size={len(infoset.player_hand_cards)}', file=sys.stderr)
+        if legal_actions:
+            print(f'  legal_actions[0:3]={legal_actions[:3]}', file=sys.stderr)
+
+        if legal_actions:
+            return random.choice(legal_actions)
+        return []
 
     # ------------------------------------------------------------------
     #  Leading: decompose hand and play the combo with the smallest card
@@ -174,28 +192,34 @@ class RuleAgent:
     def _lead(self, hand_cards, legal_actions):
         """Pick a leading move.  Decompose hand into categories, then
         return the combo that contains the smallest remaining card."""
-        comb = _decompose_hand(hand_cards)
+        try:
+            comb = _decompose_hand(hand_cards)
+        except Exception:
+            import sys
+            import traceback
+            print(f'[RuleAgent {self.position}] _decompose_hand failed:', file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            return None
 
         # Walk through categories in order and pick the one containing
         # the minimum card value.
         categories = [
-            ('king_bomb',      True),
-            ('bomb',           True),
-            ('serial_3_2',     True),
-            ('serial_triple',  True),
-            ('serial_pair',    True),
-            ('trio_2',         True),
-            ('triple',         False),
-            ('pair',           False),
-            ('single',         False),
+            'king_bomb',
+            'bomb',
+            'serial_3_2',
+            'serial_triple',
+            'serial_pair',
+            'trio_2',
+            'triple',
+            'pair',
+            'single',
         ]
 
-        for cat_name, _ in categories:
+        min_card = min(hand_cards)
+        for cat_name in categories:
             moves = comb[cat_name]
             if not moves:
                 continue
-            # Find the move whose minimum card equals the overall min
-            min_card = min(hand_cards)
             for m in moves:
                 if min_card in m:
                     # Verify this move is legal
@@ -289,12 +313,11 @@ def _decompose_hand(cards):
                 comb['trio_2'].append(sorted(need))
                 for c in need:
                     remaining.remove(c)
-                break   # only one trio_2 per triple rank
+                break
         counts = collections.Counter(remaining)
 
     # --- 7. Remaining triples ---
     for rank in sorted(k for k, v in counts.items() if v >= 3):
-        need = min(counts[rank], 3)   # should always be 3 or more
         comb['triple'].append([rank] * 3)
         for _ in range(3):
             remaining.remove(rank)
@@ -403,13 +426,11 @@ def _extract_serial_3_2(cards):
         i = j + 1 if j == i else j
 
     for run in triple_runs:
-        k = len(run)  # need k consecutive pair ranks, non-overlapping with run
+        k = len(run)
         run_set = set(run)
 
-        # Find all consecutive pair runs (length ≥ k)
         pair_candidates = [r for r in seq_ranks if r not in run_set and counts[r] >= 2]
 
-        # Look for a consecutive sub-sequence of length k in pair_candidates
         for start in range(len(pair_candidates) - k + 1):
             sub = pair_candidates[start:start + k]
             if all(sub[m + 1] - sub[m] == 1 for m in range(k - 1)):
@@ -419,7 +440,9 @@ def _extract_serial_3_2(cards):
                 for r in sub:
                     move.extend([r, r])
                 result.append(sorted(move))
-                break   # Only take the first (smallest) wing match
+                break
+        if result:
+            break
 
     return result
 

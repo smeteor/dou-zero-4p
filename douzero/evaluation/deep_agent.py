@@ -25,6 +25,8 @@ class DeepAgent:
         self.model = _load_model(position, model_path)
 
     def act(self, infoset):
+        if len(infoset.legal_actions) == 0:
+            return []
         if len(infoset.legal_actions) == 1:
             return infoset.legal_actions[0]
 

@@ -2,8 +2,8 @@
 Cross win rate evaluation for 4-player DouDizhu.
 
 Each deal is played twice on the SAME card distribution:
-  Batch 1 — AI as landlord, opponents (random) at the 3 farmer positions.
-  Batch 2 — opponent (random) as landlord, AI at the 3 farmer positions.
+  Batch 1 — AI as landlord, opponents at the 3 farmer positions.
+  Batch 2 — opponent as landlord, AI at the 3 farmer positions.
 
 This cancels out card-distribution luck. Position-specific checkpoints are
 loaded for each seat.
@@ -21,14 +21,32 @@ import argparse
 import multiprocessing as mp
 import os
 import pickle
+from copy import deepcopy
 
+from douzero.env.game import GameEnv
 from douzero.evaluation.simulation import (
     data_allocation_per_worker,
+    load_card_play_models,
     mp_simulate,
 )
 
 
 def _run_batch(card_play_data_list, card_play_model_path_dict, num_workers):
+    if num_workers <= 1:
+        # Sequential fallback (avoids Windows multiprocessing PermissionError)
+        total_l_wins = total_f_wins = total_l_scores = total_f_scores = 0
+        for card_play_data in card_play_data_list:
+            players = load_card_play_models(card_play_model_path_dict)
+            env = GameEnv(players)
+            env.card_play_init(deepcopy(card_play_data))
+            while not env.game_over:
+                env.step()
+            total_l_wins   += env.num_wins['landlord']
+            total_f_wins   += env.num_wins['farmer']
+            total_l_scores += env.num_scores['landlord']
+            total_f_scores += env.num_scores['farmer']
+        return total_l_wins, total_f_wins, total_l_scores, total_f_scores
+
     per_worker = data_allocation_per_worker(card_play_data_list, num_workers)
 
     ctx = mp.get_context('spawn')
@@ -56,6 +74,36 @@ def _run_batch(card_play_data_list, card_play_model_path_dict, num_workers):
     return num_landlord_wins, num_farmer_wins, num_landlord_scores, num_farmer_scores
 
 
+def _play_one(card_play_data, card_play_model_path_dict):
+    """Play a single game sequentially, return winner ('landlord' or 'farmer')."""
+    players = load_card_play_models(card_play_model_path_dict)
+    env = GameEnv(players)
+    env.card_play_init(deepcopy(card_play_data))
+    while not env.game_over:
+        env.step()
+    return env.get_winner()
+
+
+def _print_game(card_play_data, idx):
+    """Print one deal's card distribution."""
+    EnvCard2RealCard = {3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8',
+                        9: '9', 10: '10', 11: 'J', 12: 'Q', 13: 'K',
+                        14: 'A', 17: '2', 20: 'X', 30: 'D'}
+
+    def c2s(cards):
+        return ' '.join(EnvCard2RealCard[c] for c in sorted(cards))
+
+    print('-' * 60)
+    print(f'  Game #{idx} — 地主无论谁当都能赢（牌运局）')
+    print('-' * 60)
+    print(f'  地主:     {c2s(card_play_data["landlord"])}  ({len(card_play_data["landlord"])}张)')
+    print(f'  底牌:     {c2s(card_play_data["eight_landlord_cards"])}')
+    print(f'  下家:     {c2s(card_play_data["landlord_down"])}  (25张)')
+    print(f'  对面:     {c2s(card_play_data["landlord_across"])}  (25张)')
+    print(f'  上家:     {c2s(card_play_data["landlord_up"])}  (25张)')
+    print('-' * 60)
+
+
 def evaluate_cross(fps, opponent='random', eval_data='eval_data.pkl', num_workers=5):
     """Cross win rate evaluation.
 
@@ -76,25 +124,50 @@ def evaluate_cross(fps, opponent='random', eval_data='eval_data.pkl', num_worker
     with open(eval_data, 'rb') as f:
         data = pickle.load(f)
 
-    # Batch 1: AI landlord  vs  opponent farmers
+    # Model configs for the two batches
     batch1_dict = {
         'landlord':        ai_landlord_model,
         'landlord_down':   opponent,
         'landlord_across': opponent,
         'landlord_up':     opponent,
     }
-    l_wins, f_wins, l_scores, f_scores = _run_batch(data, batch1_dict, num_workers)
-    ai_wins_as_landlord = l_wins
-    ai_scores_as_landlord = l_scores
-    games_as_landlord = l_wins + f_wins
-
-    # Batch 2: opponent landlord  vs  AI farmers
     batch2_dict = {
         'landlord':        opponent,
         'landlord_down':   ai_farmer_models['landlord_down'],
         'landlord_across': ai_farmer_models['landlord_across'],
         'landlord_up':     ai_farmer_models['landlord_up'],
     }
+
+    # --- Quick sequential scan: find the first deal where landlord always wins ---
+    print('Scanning for a deal where landlord wins regardless of who plays it...')
+    found = False
+    for i, deal in enumerate(data):
+        try:
+            w1 = _play_one(deal, batch1_dict)
+        except Exception as e:
+            print(f'  [game {i}] batch1 error: {type(e).__name__}: {e}')
+            continue
+        try:
+            w2 = _play_one(deal, batch2_dict)
+        except Exception as e:
+            print(f'  [game {i}] batch2 error: {type(e).__name__}: {e}')
+            continue
+        if w1 == 'landlord' and w2 == 'landlord':
+            _print_game(deal, i)
+            found = True
+            break
+    if not found:
+        print('(none found — ok)')
+    print()
+
+    # --- Full multiprocess evaluation ---
+    print('Running full evaluation...')
+
+    l_wins, f_wins, l_scores, f_scores = _run_batch(data, batch1_dict, num_workers)
+    ai_wins_as_landlord = l_wins
+    ai_scores_as_landlord = l_scores
+    games_as_landlord = l_wins + f_wins
+
     l_wins, f_wins, l_scores, f_scores = _run_batch(data, batch2_dict, num_workers)
     ai_wins_as_farmer = f_wins
     ai_scores_as_farmer = f_scores
