@@ -62,14 +62,14 @@ def _run_batch(card_play_data_list, card_play_model_path_dict, num_workers):
         p.start()
         processes.append(p)
 
-    for p in processes:
-        p.join()
-
-    # Collect results keyed by worker_id, then reassemble in correct order
+    # Collect results while processes are running to avoid pipe-buffer deadlock
     worker_results = {}
     for _ in range(num_workers):
         result = q.get()
         worker_results[result[0]] = result[1:]
+
+    for p in processes:
+        p.join()
 
     num_landlord_wins = num_farmer_wins = 0
     num_landlord_scores = num_farmer_scores = 0
