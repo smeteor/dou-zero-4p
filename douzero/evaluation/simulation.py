@@ -25,18 +25,25 @@ def load_card_play_models(card_play_model_path_dict):
     return players
 
 
-def mp_simulate(card_play_data_list, card_play_model_path_dict, q):
+def mp_simulate(card_play_data_list, card_play_model_path_dict, q, worker_id=0):
     players = load_card_play_models(card_play_model_path_dict)
     env = GameEnv(players)
+    per_deal_winners = []
+    per_deal_scores = []
     for card_play_data in card_play_data_list:
         env.card_play_init(card_play_data)
         while not env.game_over:
             env.step()
+        per_deal_winners.append(env.get_winner())
+        per_deal_scores.append(env.num_scores.copy())
         env.reset()
-    q.put((env.num_wins['landlord'],
+    q.put((worker_id,
+           env.num_wins['landlord'],
            env.num_wins['farmer'],
            env.num_scores['landlord'],
-           env.num_scores['farmer']))
+           env.num_scores['farmer'],
+           per_deal_winners,
+           per_deal_scores))
 
 
 def data_allocation_per_worker(card_play_data_list, num_workers):
@@ -77,10 +84,11 @@ def evaluate(landlord, landlord_down, landlord_across, landlord_up, eval_data, n
 
     for _ in range(num_workers):
         result = q.get()
-        num_landlord_wins   += result[0]
-        num_farmer_wins     += result[1]
-        num_landlord_scores += result[2]
-        num_farmer_scores   += result[3]
+        # result: (worker_id, l_wins, f_wins, l_scores, f_scores, ...)
+        num_landlord_wins   += result[1]
+        num_farmer_wins     += result[2]
+        num_landlord_scores += result[3]
+        num_farmer_scores   += result[4]
 
     total = num_landlord_wins + num_farmer_wins
     print('WP results:')

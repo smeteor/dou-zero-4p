@@ -35,6 +35,8 @@ def _run_batch(card_play_data_list, card_play_model_path_dict, num_workers):
     if num_workers <= 1:
         # Sequential fallback (avoids Windows multiprocessing PermissionError)
         total_l_wins = total_f_wins = total_l_scores = total_f_scores = 0
+        per_deal_winners = []
+        per_deal_scores = []
         for card_play_data in card_play_data_list:
             players = load_card_play_models(card_play_model_path_dict)
             env = GameEnv(players)
@@ -45,33 +47,45 @@ def _run_batch(card_play_data_list, card_play_model_path_dict, num_workers):
             total_f_wins   += env.num_wins['farmer']
             total_l_scores += env.num_scores['landlord']
             total_f_scores += env.num_scores['farmer']
-        return total_l_wins, total_f_wins, total_l_scores, total_f_scores
+            per_deal_winners.append(env.get_winner())
+            per_deal_scores.append(env.num_scores.copy())
+        return total_l_wins, total_f_wins, total_l_scores, total_f_scores, per_deal_winners, per_deal_scores
 
     per_worker = data_allocation_per_worker(card_play_data_list, num_workers)
 
     ctx = mp.get_context('spawn')
     q = ctx.SimpleQueue()
     processes = []
-    for data_chunk in per_worker:
+    for i, data_chunk in enumerate(per_worker):
         p = ctx.Process(target=mp_simulate,
-                        args=(data_chunk, card_play_model_path_dict, q))
+                        args=(data_chunk, card_play_model_path_dict, q, i))
         p.start()
         processes.append(p)
 
     for p in processes:
         p.join()
 
-    num_landlord_wins = num_farmer_wins = 0
-    num_landlord_scores = num_farmer_scores = 0
-
+    # Collect results keyed by worker_id, then reassemble in correct order
+    worker_results = {}
     for _ in range(num_workers):
         result = q.get()
-        num_landlord_wins   += result[0]
-        num_farmer_wins     += result[1]
-        num_landlord_scores += result[2]
-        num_farmer_scores   += result[3]
+        worker_results[result[0]] = result[1:]
 
-    return num_landlord_wins, num_farmer_wins, num_landlord_scores, num_farmer_scores
+    num_landlord_wins = num_farmer_wins = 0
+    num_landlord_scores = num_farmer_scores = 0
+    per_deal_winners = []
+    per_deal_scores = []
+
+    for i in range(num_workers):
+        l_wins, f_wins, l_scores, f_scores, p_winners, p_scores = worker_results[i]
+        num_landlord_wins   += l_wins
+        num_farmer_wins     += f_wins
+        num_landlord_scores += l_scores
+        num_farmer_scores   += f_scores
+        per_deal_winners.extend(p_winners)
+        per_deal_scores.extend(p_scores)
+
+    return num_landlord_wins, num_farmer_wins, num_landlord_scores, num_farmer_scores, per_deal_winners, per_deal_scores
 
 
 def _play_one(card_play_data, card_play_model_path_dict):
@@ -163,12 +177,18 @@ def evaluate_cross(fps, opponent='random', eval_data='eval_data.pkl', num_worker
     # --- Full multiprocess evaluation ---
     print('Running full evaluation...')
 
-    l_wins, f_wins, l_scores, f_scores = _run_batch(data, batch1_dict, num_workers)
+    ret = _run_batch(data, batch1_dict, num_workers)
+    l_wins, f_wins, l_scores, f_scores = ret[:4]
+    per_deal_winners1 = ret[4] if len(ret) > 4 else []
+
     ai_wins_as_landlord = l_wins
     ai_scores_as_landlord = l_scores
     games_as_landlord = l_wins + f_wins
 
-    l_wins, f_wins, l_scores, f_scores = _run_batch(data, batch2_dict, num_workers)
+    ret = _run_batch(data, batch2_dict, num_workers)
+    l_wins, f_wins, l_scores, f_scores = ret[:4]
+    per_deal_winners2 = ret[4] if len(ret) > 4 else []
+
     ai_wins_as_farmer = f_wins
     ai_scores_as_farmer = f_scores
     games_as_farmer = l_wins + f_wins
@@ -179,6 +199,56 @@ def evaluate_cross(fps, opponent='random', eval_data='eval_data.pkl', num_worker
 
     cross_wp = total_ai_wins / total_games if total_games > 0 else 0
     cross_adp = total_ai_scores / total_games if total_games > 0 else 0
+
+    # --- Compute Valid WP / Valid ADP ---
+    # A deal is "invalid" if the outcome is predetermined (landlord always wins
+    # or landlord always loses regardless of who plays it):
+    #   - batch1 landlord win AND batch2 landlord win  → always landlord wins
+    #   - batch1 farmer win   AND batch2 farmer win    → always farmer wins
+    n_deals = len(data)
+    invalid_both_landlord_win = 0
+    invalid_both_farmer_win = 0
+
+    valid_ai_landlord_wins = 0
+    valid_ai_landlord_score = 0
+    valid_ai_farmer_wins = 0
+    valid_ai_farmer_score = 0
+
+    has_per_deal = len(per_deal_winners1) > 0 and len(per_deal_winners2) > 0
+    if has_per_deal:
+        for i in range(n_deals):
+            w1 = per_deal_winners1[i]  # batch1: AI=landlord, opponent=farmer
+            w2 = per_deal_winners2[i]  # batch2: opponent=landlord, AI=farmer
+
+            if w1 == 'landlord' and w2 == 'landlord':
+                invalid_both_landlord_win += 1
+                continue  # landlord always wins regardless → skip
+            if w1 == 'farmer' and w2 == 'farmer':
+                invalid_both_farmer_win += 1
+                continue  # farmer always wins regardless → skip
+
+            # Valid deal
+            if w1 == 'landlord':
+                valid_ai_landlord_wins += 1
+                valid_ai_landlord_score += 3
+            else:
+                valid_ai_landlord_score -= 3
+
+            if w2 == 'farmer':
+                valid_ai_farmer_wins += 1
+                valid_ai_farmer_score += 1
+            else:
+                valid_ai_farmer_score -= 1
+
+        valid_deals = n_deals - invalid_both_landlord_win - invalid_both_farmer_win
+        valid_wp_landlord = valid_ai_landlord_wins / valid_deals if valid_deals > 0 else 0
+        valid_wp_farmer = valid_ai_farmer_wins / valid_deals if valid_deals > 0 else 0
+        valid_adp_landlord = valid_ai_landlord_score / valid_deals if valid_deals > 0 else 0
+        valid_adp_farmer = valid_ai_farmer_score / valid_deals if valid_deals > 0 else 0
+        valid_cross_wins = valid_ai_landlord_wins + valid_ai_farmer_wins
+        valid_cross_score = valid_ai_landlord_score + valid_ai_farmer_score
+        valid_cross_wp = valid_cross_wins / (valid_deals * 2) if valid_deals > 0 else 0
+        valid_cross_adp = valid_cross_score / (valid_deals * 2) if valid_deals > 0 else 0
 
     print('=' * 60)
     print('Cross Win Rate Evaluation')
@@ -205,9 +275,19 @@ def evaluate_cross(fps, opponent='random', eval_data='eval_data.pkl', num_worker
     print('-' * 60)
     print(f'  Cross WP:           {cross_wp:.4f}  ({total_ai_wins}/{total_games})')
     print(f'  Cross ADP:          {cross_adp:.4f}')
+    if has_per_deal:
+        print('-' * 60)
+        print(f'  Valid deals:        {valid_deals}/{n_deals}'
+              f'  (excluded: landlord-always {invalid_both_landlord_win}, farmer-always {invalid_both_farmer_win})')
+        print(f'  Valid WP (AI land): {valid_wp_landlord:.4f}  ({valid_ai_landlord_wins}/{valid_deals})')
+        print(f'  Valid ADP (AI land):{valid_adp_landlord:.4f}')
+        print(f'  Valid WP (AI farm): {valid_wp_farmer:.4f}  ({valid_ai_farmer_wins}/{valid_deals})')
+        print(f'  Valid ADP (AI farm):{valid_adp_farmer:.4f}')
+        print(f'  Valid Cross WP:     {valid_cross_wp:.4f}  ({valid_cross_wins}/{valid_deals * 2})')
+        print(f'  Valid Cross ADP:    {valid_cross_adp:.4f}')
     print('=' * 60)
 
-    return {
+    return_dict = {
         'cross_wp': cross_wp,
         'cross_adp': cross_adp,
         'total_games': total_games,
@@ -219,6 +299,19 @@ def evaluate_cross(fps, opponent='random', eval_data='eval_data.pkl', num_worker
         'games_as_farmer': games_as_farmer,
         'wp_as_farmer': ai_wins_as_farmer / games_as_farmer if games_as_farmer > 0 else 0,
     }
+    if has_per_deal:
+        return_dict.update({
+            'valid_deals': valid_deals,
+            'invalid_both_landlord_win': invalid_both_landlord_win,
+            'invalid_both_farmer_win': invalid_both_farmer_win,
+            'valid_wp_landlord': valid_wp_landlord,
+            'valid_wp_farmer': valid_wp_farmer,
+            'valid_adp_landlord': valid_adp_landlord,
+            'valid_adp_farmer': valid_adp_farmer,
+            'valid_cross_wp': valid_cross_wp,
+            'valid_cross_adp': valid_cross_adp,
+        })
+    return return_dict
 
 
 if __name__ == '__main__':
