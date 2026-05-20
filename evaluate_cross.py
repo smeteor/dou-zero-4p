@@ -88,18 +88,7 @@ def _run_batch(card_play_data_list, card_play_model_path_dict, num_workers):
     return num_landlord_wins, num_farmer_wins, num_landlord_scores, num_farmer_scores, per_deal_winners, per_deal_scores
 
 
-def _play_one(card_play_data, card_play_model_path_dict):
-    """Play a single game sequentially, return winner ('landlord' or 'farmer')."""
-    players = load_card_play_models(card_play_model_path_dict)
-    env = GameEnv(players)
-    env.card_play_init(deepcopy(card_play_data))
-    while not env.game_over:
-        env.step()
-    return env.get_winner()
-
-
-def _print_game(card_play_data, idx):
-    """Print one deal's card distribution."""
+def _print_deal(card_play_data, idx):
     EnvCard2RealCard = {3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8',
                         9: '9', 10: '10', 11: 'J', 12: 'Q', 13: 'K',
                         14: 'A', 17: '2', 20: 'X', 30: 'D'}
@@ -108,13 +97,13 @@ def _print_game(card_play_data, idx):
         return ' '.join(EnvCard2RealCard[c] for c in sorted(cards))
 
     print('-' * 60)
-    print(f'  Game #{idx} — 地主无论谁当都能赢（牌运局）')
+    print(f'  Deal #{idx} — 牌运局：地主无论谁当都能赢')
     print('-' * 60)
-    print(f'  地主:     {c2s(card_play_data["landlord"])}  ({len(card_play_data["landlord"])}张)')
-    print(f'  底牌:     {c2s(card_play_data["eight_landlord_cards"])}')
-    print(f'  下家:     {c2s(card_play_data["landlord_down"])}  (25张)')
-    print(f'  对面:     {c2s(card_play_data["landlord_across"])}  (25张)')
-    print(f'  上家:     {c2s(card_play_data["landlord_up"])}  (25张)')
+    print(f'  地主:   {c2s(card_play_data["landlord"])}  ({len(card_play_data["landlord"])}张)')
+    print(f'  底牌:   {c2s(card_play_data["eight_landlord_cards"])}')
+    print(f'  下家:   {c2s(card_play_data["landlord_down"])}  (25张)')
+    print(f'  对家:   {c2s(card_play_data["landlord_across"])}  (25张)')
+    print(f'  上家:   {c2s(card_play_data["landlord_up"])}  (25张)')
     print('-' * 60)
 
 
@@ -151,28 +140,6 @@ def evaluate_cross(fps, opponent='random', eval_data='eval_data.pkl', num_worker
         'landlord_across': ai_farmer_models['landlord_across'],
         'landlord_up':     ai_farmer_models['landlord_up'],
     }
-
-    # --- Quick sequential scan: find the first deal where landlord always wins ---
-    print('Scanning for a deal where landlord wins regardless of who plays it...')
-    found = False
-    for i, deal in enumerate(data):
-        try:
-            w1 = _play_one(deal, batch1_dict)
-        except Exception as e:
-            print(f'  [game {i}] batch1 error: {type(e).__name__}: {e}')
-            continue
-        try:
-            w2 = _play_one(deal, batch2_dict)
-        except Exception as e:
-            print(f'  [game {i}] batch2 error: {type(e).__name__}: {e}')
-            continue
-        if w1 == 'landlord' and w2 == 'landlord':
-            _print_game(deal, i)
-            found = True
-            break
-    if not found:
-        print('(none found — ok)')
-    print()
 
     # --- Full multiprocess evaluation ---
     print('Running full evaluation...')
@@ -249,6 +216,14 @@ def evaluate_cross(fps, opponent='random', eval_data='eval_data.pkl', num_worker
         valid_cross_score = valid_ai_landlord_score + valid_ai_farmer_score
         valid_cross_wp = valid_cross_wins / (valid_deals * 2) if valid_deals > 0 else 0
         valid_cross_adp = valid_cross_score / (valid_deals * 2) if valid_deals > 0 else 0
+
+        # Print the first deal where landlord always wins
+        for i in range(n_deals):
+            w1 = per_deal_winners1[i]
+            w2 = per_deal_winners2[i]
+            if w1 == 'landlord' and w2 == 'landlord':
+                _print_deal(data[i], i)
+                break
 
     print('=' * 60)
     print('Cross Win Rate Evaluation')
