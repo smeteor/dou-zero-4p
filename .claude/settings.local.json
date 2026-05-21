@@ -6,7 +6,10 @@
       "Bash(python *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(git config *)",
+      "Bash(git filter-branch *)",
+      "Bash(git stash *)"
     ]
   }
 }

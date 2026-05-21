@@ -234,49 +234,15 @@ class GameEnv(object):
         self.info_sets[pos].last_move_dict = self.last_move_dict
         self.info_sets[pos].num_cards_left_dict = {
             p: len(self.info_sets[p].player_hand_cards) for p in _POSITIONS}
-
-        # Build other_hand_cards with bottom cards hidden from farmers
         self.info_sets[pos].other_hand_cards = []
         for p in _POSITIONS:
             if p != pos:
-                if pos != 'landlord' and p == 'landlord':
-                    # Farmers don't see bottom cards from landlord's hand
-                    bottom_set = set(self.eight_landlord_cards)
-                    # Filter out unplayed bottom cards from landlord's visible hand
-                    filtered_landlord = []
-                    for c in self.info_sets[p].player_hand_cards:
-                        if c not in bottom_set:
-                            filtered_landlord.append(c)
-                        elif c in bottom_set:
-                            bottom_set.remove(c)  # Only remove one copy
-                    self.info_sets[pos].other_hand_cards += filtered_landlord
-                else:
-                    self.info_sets[pos].other_hand_cards += self.info_sets[p].player_hand_cards
+                self.info_sets[pos].other_hand_cards += self.info_sets[p].player_hand_cards
         self.info_sets[pos].played_cards = self.played_cards
-
-        # Only landlord gets to see eight_landlord_cards
-        if pos == 'landlord':
-            self.info_sets[pos].eight_landlord_cards = self.eight_landlord_cards
-        else:
-            self.info_sets[pos].eight_landlord_cards = []
-
+        self.info_sets[pos].eight_landlord_cards = self.eight_landlord_cards
         self.info_sets[pos].card_play_action_seq = self.card_play_action_seq
-
-        # For all_handcards: if position is not landlord, don't show bottom cards
-        self.info_sets[pos].all_handcards = {}
-        for p in _POSITIONS:
-            if pos != 'landlord' and p == 'landlord':
-                # Filter bottom cards from landlord's hand for farmer view
-                bottom_set = set(self.eight_landlord_cards)
-                filtered_landlord = []
-                for c in self.info_sets[p].player_hand_cards:
-                    if c not in bottom_set:
-                        filtered_landlord.append(c)
-                    elif c in bottom_set:
-                        bottom_set.remove(c)
-                self.info_sets[pos].all_handcards[p] = filtered_landlord
-            else:
-                self.info_sets[pos].all_handcards[p] = self.info_sets[p].player_hand_cards
+        self.info_sets[pos].all_handcards = {
+            p: self.info_sets[p].player_hand_cards for p in _POSITIONS}
 
         return deepcopy(self.info_sets[pos])
 
